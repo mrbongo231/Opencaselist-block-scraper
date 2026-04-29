@@ -42,9 +42,9 @@ I coded this tool because I saw my debate event(public forum) was heavily relian
 pip install requests python-docx docx2pdf
 
 ## Usage
-Open the script and replace:
+Set your token as an environment variable:
 
-CASELIST_TOKEN = "REPLACE_ME_WITH_YOUR_TOKEN"
+export CASELIST_TOKEN="your_opencaselist_token"
 
 Run the program:
 

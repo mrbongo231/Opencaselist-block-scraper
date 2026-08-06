@@ -355,14 +355,12 @@ def split_docx_into_speech_sections(src_bytes: bytes, meta: dict):
     return sections
 
 
-def copy_section_into(paragraph_elements, dest_doc: Document) -> int:
+def copy_section_into(paragraph_elements: list, dest_doc: Document) -> int:
     dest_body = dest_doc.element.body
-    insert_idx = len(dest_body) - 1
     count = 0
-    for p in paragraph_elements:
-        new_p = copy.deepcopy(p)
-        dest_body.insert(insert_idx, new_p)
-        insert_idx += 1
+    for el in paragraph_elements:
+        new_el = copy.deepcopy(el)
+        dest_body.append(new_el)
         count += 1
 
     dest_doc.add_paragraph()
@@ -474,7 +472,8 @@ def main() -> None:
         path = str(meta.get("opensource") or "").strip()
         if not path:
             continue
-        if not path.lower().endswith(".docx"):
+        is_pdf = path.lower().endswith(".pdf")
+        if not (path.lower().endswith(".docx") or is_pdf):
             non_docx += 1
             continue
 
@@ -513,11 +512,11 @@ def main() -> None:
         if not sections:
             sections = [(extract_primary_speech_label(meta), "Full File", [])]
 
-        for idx, (speech_label, section_title, paragraph_elements) in enumerate(sections):
+        for idx, (speech_label, section_title, _) in enumerate(sections):
             speech_label = normalize_speech_for_bucket(bucket, speech_label)
             if args.blocks_only and speech_label not in allowed_block_speeches:
                 continue
-            by_bucket_speech_tourn[bucket][speech_label][tourn].append((meta, idx, section_title, paragraph_elements))
+            by_bucket_speech_tourn[bucket][speech_label][tourn].append((meta, idx, section_title))
 
     bucket_order = ["A2 Aff", "A2 Neg", "Pro", "Con", "Uncategorized"]
     speech_order = ["1AC", "1NC", "2AC", "2NC", "1AR", "1NR", "2AR", "2NR", "Final Focus", "Crossfire/CX", "Other"]
@@ -546,13 +545,26 @@ def main() -> None:
             for tourn_name in sorted(tourn_map.keys(), key=lambda x: str(x).lower()):
                 entries = sorted(tourn_map[tourn_name], key=lambda row: _section_entry_sort_key(row[0], row[1]))
                 _add_tournament_subheading(out_doc, tourn_name)
-
-                for meta, sec_idx, section_title, paragraph_elements in entries:
-                    n = copy_section_into(paragraph_elements, out_doc)
-                    print(
-                        f"  v  [{bucket} | {speech_label}] {Path(meta['opensource']).name} "
-                        f"({n} paragraphs, section #{sec_idx + 1}: {section_title})"
-                    )
+                for meta, sec_idx, section_title in entries:
+                    # Parse the docx just-in-time to avoid holding 300+ parsed XML trees in memory
+                    key = hashlib.md5(str(meta.get("opensource") or "").strip().encode()).hexdigest()
+                    cached = Path("caselist_output/cache") / f"{key}.docx"
+                    
+                    try:
+                        data = cached.read_bytes()
+                        temp_sections = split_docx_into_speech_sections(data, meta)
+                        if not temp_sections:
+                            temp_sections = [(extract_primary_speech_label(meta), "Full File", [])]
+                        
+                        paragraph_elements = temp_sections[sec_idx][2] if sec_idx < len(temp_sections) else []
+                        
+                        n = copy_section_into(paragraph_elements, out_doc)
+                        print(
+                            f"  v  [{bucket} | {speech_label}] {Path(meta['opensource']).name} "
+                            f"({n} paragraphs, section #{sec_idx + 1}: {section_title})"
+                        )
+                    except Exception as e:
+                        print(f"  [!] Failed to re-parse {Path(meta.get('opensource', '')).name}: {e}")
 
         out_doc.add_page_break()
 

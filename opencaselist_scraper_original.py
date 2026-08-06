@@ -33,8 +33,8 @@ from docx.shared import Inches, Pt, RGBColor
 # Configuration
 # ============================
 
-CASELIST_TOKEN = os.getenv("CASELIST_TOKEN", "").strip()
-DEFAULT_CASELIST = "hspf25"
+CASELIST_TOKEN = (os.getenv("CASELIST_TOKEN", "").strip() or "7197e95921e0982ac01651ae3045ff26")
+DEFAULT_CASELIST = "hspf26"
 CASELIST = (os.getenv("CASELIST", DEFAULT_CASELIST).strip() or DEFAULT_CASELIST)
 
 SPECIFIC_TEAMS = [

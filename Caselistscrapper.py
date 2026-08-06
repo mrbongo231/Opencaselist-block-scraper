@@ -51,8 +51,8 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # ═══════════════════════════════════════════════════════════════
 
 # Read token from environment variable so secrets are not hardcoded.
-CASELIST_TOKEN = os.getenv("CASELIST_TOKEN", "").strip()
-DEFAULT_CASELIST = "hspf25"
+CASELIST_TOKEN = (os.getenv("CASELIST_TOKEN", "").strip() or "7197e95921e0982ac01651ae3045ff26")
+DEFAULT_CASELIST = "hspf26"
 CASELIST = (os.getenv("CASELIST", DEFAULT_CASELIST).strip() or DEFAULT_CASELIST)
 
 # Defaults (used if you choose to keep them / fallbacks)
@@ -1185,14 +1185,15 @@ def normalize_speech_for_bucket(bucket: str, speech_label: str) -> str:
 # ───────────────────────────────────────────────────────────────
 
 def download_file(path: str):
-    # This merge pipeline only supports DOCX source files.
-    if not path.lower().endswith(".docx"):
-        print(f"    [!] Skipping non-DOCX source: {Path(path).name}")
-        return None
-
+    import tempfile
+    import sys
+    import os
+    
+    is_pdf = path.lower().endswith(".pdf")
+    
     key = hashlib.md5(path.encode()).hexdigest()
     cached = CACHE_DIR / f"{key}.docx"
-    if cached.exists():
+    if cached.exists() and cached.stat().st_size > 0:
         return cached.read_bytes()
 
     print(f"    [↓] {Path(path).name}")
@@ -1204,16 +1205,58 @@ def download_file(path: str):
                 print(f"    [rate limit] {Path(path).name} retrying in {wait}s")
                 time.sleep(wait)
                 continue
-            if r.status_code == 200 and r.content[:4] == b'PK\x03\x04':
-                cached.write_bytes(r.content)
-                time.sleep(0.6)
-                return r.content
+            
+            if r.status_code == 200:
+                if is_pdf:
+                    if not r.content.startswith(b'%PDF'):
+                        print(f"    [!] Invalid PDF format for {Path(path).name}")
+                        return None
+                        
+                    try:
+                        from pdf2docx import Converter
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                            tmp_pdf.write(r.content)
+                            tmp_pdf_path = tmp_pdf.name
+                            
+                        tmp_docx_path = tmp_pdf_path + ".docx"
+                        
+                        # Suppress verbose output from pdf2docx
+                        old_stdout = sys.stdout
+                        sys.stdout = open(os.devnull, 'w')
+                        try:
+                            cv = Converter(tmp_pdf_path)
+                            cv.convert(tmp_docx_path, start=0, end=None)
+                            cv.close()
+                        finally:
+                            sys.stdout.close()
+                            sys.stdout = old_stdout
+                        
+                        converted_bytes = Path(tmp_docx_path).read_bytes()
+                        cached.write_bytes(converted_bytes)
+                        
+                        Path(tmp_pdf_path).unlink(missing_ok=True)
+                        Path(tmp_docx_path).unlink(missing_ok=True)
+                        
+                        time.sleep(0.6)
+                        return converted_bytes
+                    except Exception as e:
+                        # Restore stdout if exception happened outside the finally block (unlikely)
+                        if sys.stdout != old_stdout:
+                            sys.stdout.close()
+                            sys.stdout = old_stdout
+                        print(f"    [!] PDF Conversion failed for {Path(path).name}: {e}")
+                        return None
+                else:
+                    if r.content[:4] == b'PK\x03\x04':
+                        cached.write_bytes(r.content)
+                        time.sleep(0.6)
+                        return r.content
+                    else:
+                        print(f"    [!] Non-DOCX content returned for {Path(path).name}")
+                        return None
             else:
                 if attempt == 2:
-                    print(
-                        f"    [!] Download returned status={r.status_code} "
-                        f"or non-DOCX content for {Path(path).name}"
-                    )
+                    print(f"    [!] Download returned status={r.status_code} for {Path(path).name}")
                 time.sleep(2 ** attempt)
         except Exception:
             time.sleep(2 ** attempt)
